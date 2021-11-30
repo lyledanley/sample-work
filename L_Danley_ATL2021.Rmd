@@ -1,0 +1,341 @@
+---
+title: \vspace{-0.75cm} \begin{normalsize}  "Atlanta Hawks Technical Assessment" \end{normalsize} \vspace{-0.5cm}
+author: "Lyle Danley"
+date: "9/23/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(readr)
+library(tidyverse)
+library(ggpubr)
+library(nbastatR)
+library(boRingTrees)
+library(ggcorrplot)
+
+#scraping play by play data and a list of players for future use
+pbp <- read_csv("https://eightthirtyfour.com/nba/pbp/events_2018-2019_pbp.csv",
+                col_types = cols(...1 = col_skip(),
+                                 PCTIMESTRING = col_time(format = "%M:%S")))
+playerlist <- read_csv("https://eightthirtyfour.com/nba/pbp/playerlist.csv",
+                       col_types = cols(...1 = col_skip()))
+#I'll use the nbastatR game logs to do the ACWR part, so loading that data now.
+games_2018 <- game_logs(
+  seasons = 2019,
+  league = "NBA",
+  result_types = "player"
+)
+teams_2018 <- game_logs(
+  seasons = 2019,
+  league = "NBA",
+  result_types = "team"
+)
+#height weight previously given, saved as a CSV and loaded
+HtWt <- read_csv("HtWt.csv")
+
+#putting the playerlist in the best format for a join
+playerlist <- playerlist %>% select(DISPLAY_FIRST_LAST,PERSON_ID)
+```
+
+##### Explain how you would count a single player’s total offensive rebounds for the season.  Please reference specific items in the data you would use. 
+For this first part I care about rebounds, it looks like the second column, EVENTMSGTYPE, can tell me rebounds. I'll filter by `EVENTMSGTYPE == 4`, then  I'd like to group by team, then by player, then use `summarize(n())` to get the number of instances of each for each individual player. I did this in lines 34-42 of the attached script.  a.	Provide a list of the top 10 offensive rebounders (total rebounds) in the last six minutes of the first quarter.  Display the output in a chart or graph of your choosing.
+
+```{r reboundplot, echo = F, include = T, warning = F, fig.align = "center", fig.height = 3, fig.width= 6, fig.align= "center"}
+top10_offensive_boards <- pbp %>% 
+  filter(EVENTMSGTYPE == 4, TIME %in% 361:720) %>% 
+  #filtering rebounds and appropriate time
+  mutate(OFFENSIVE_REBOUND_BINARY = 
+           if_else(is.na(REBOUND_OFFENSIVE_COUNT),0,                                            if_else(REBOUND_OFFENSIVE_COUNT != 0, 1, 0))) %>% 
+  #deriving a count of offensive boards rather than a cumsum how the data set is
+  #presented
+  group_by(REBOUND_PLAYER_ID) %>% 
+  #grouping by player and by offensive rebounds
+  summarize(Offensive_Rebound_Sum = sum(OFFENSIVE_REBOUND_BINARY)) %>%
+  #summarizing counts of offensive boards
+  left_join(playerlist, by = c("REBOUND_PLAYER_ID" = "PERSON_ID")) %>%
+  #attaching player names
+  slice_max(Offensive_Rebound_Sum, n = 10) %>%
+  #taking the top 10
+  select(Player = DISPLAY_FIRST_LAST, Offensive_Rebound_Sum)
+  #cleaning up the output
+
+
+boards_plot <- top10_offensive_boards %>% 
+  ggplot(aes(x = reorder(Player, Offensive_Rebound_Sum),
+             y = Offensive_Rebound_Sum, fill = Offensive_Rebound_Sum)) +
+  geom_col() +
+  geom_text(aes(label = Offensive_Rebound_Sum), hjust = 1.5, color = "white") +
+  scale_x_discrete(labels = function(x) str_wrap(x, width = 7)) +
+  xlab("")+
+  ylab("")+
+  theme(legend.position = "none") +
+  ggtitle("Top 10 Offensive Rebounders in Last Half of First Quarter",
+          "Total Rebounds, 2018-2019 Season")+
+  coord_flip()
+print(boards_plot)
+
+
+```
+
+##### (B)	What was the most common two-man pair played by each team in the following window: 3 minutes remaining in Q1 to 9 minutes remaining in Q2? Display the output in a chart or graph of your choosing
+To accomplish part B, I'm going to need to take each player id in home and away and put them into one dataframe. Then after preprocessing I used a for loop with teh `combn` function to extract the most common occurrences of pairs of players by minutes played in the given time window. The for loop then pasted the team, the player pair, and the minutes played into a blank dataframe. I then split the pair column, joined the playerid with its player's name, and pasted them back together. I plotted by division to make the plot easier to read.
+
+```{r pairsplots, echo = F, include = T, warning = F, fig.width = 15, fig.height = 7, fig.align = "center"}
+Away_Players <- pbp %>% dplyr::select(GAME_ID, 
+                               TIME, 
+                               TEAM = AWAY_TEAM, 
+                               PLAYER_1 = AWAY_PLAYER_ID_1, 
+                               PLAYER_2 = AWAY_PLAYER_ID_2, 
+                               PLAYER_3 = AWAY_PLAYER_ID_3, 
+                               PLAYER_4 = AWAY_PLAYER_ID_4, 
+                               PLAYER_5 = AWAY_PLAYER_ID_5)
+Home_Players <- pbp %>% dplyr::select(GAME_ID, 
+                               TIME, 
+                               TEAM = HOME_TEAM, 
+                               PLAYER_1 = HOME_PLAYER_ID_1, 
+                               PLAYER_2 = HOME_PLAYER_ID_2, 
+                               PLAYER_3 = HOME_PLAYER_ID_3, 
+                               PLAYER_4 = HOME_PLAYER_ID_4, 
+                               PLAYER_5 = HOME_PLAYER_ID_5)
+#putting home and away into one dataframe
+df <- rbind(Home_Players,Away_Players)
+#setting for future use
+playercols <- paste0("PLAYER_", 1:5)
+#setting the player ID's as a factor
+df <- df %>% 
+  dplyr::mutate(
+  across(
+    .cols = all_of(playercols),
+    .fns = ~ factor(.x)
+    )
+)
+#setting the appropriate time filter: 3:00 in Q1 - 9 min in Q2
+df <- df %>% filter(TIME %in% 540:900)
+#setting time as difference between time and origin, which is 540 (see stackoverflow link for part B)
+df <- df %>% dplyr::group_by(GAME_ID, TEAM) %>%
+  dplyr::mutate(SECONDS = TIME - lag(TIME, default = 540)) %>% 
+  dplyr::ungroup()
+#setting dataframe for loop to paste into
+pairs <- data.frame(TEAM=character(),
+                    PLAYERS=character(),
+                    COMBOS=integer(),
+                    SECONDS = integer())
+#using a loop to run a function to count pairs
+for (i in 1:length(table(df$TEAM))) {
+  #start with teams
+  team = names(table(df$TEAM))[i]
+  #subset by team name
+  subset = df %>% filter(TEAM == team)
+  #this uses the combn function, applied across groups set by team, returning
+  #the top count of instance for each team
+  combo = sort(table(apply(subset[playercols], 1, function(x) combn(x, 2, paste, collapse="-"))), decreasing = TRUE)[1]
+  # taking the count of seconds for the top pair set by the above function
+  seconds <- subset %>% dplyr::filter((PLAYER_1 == strsplit(names(combo), 
+                                                            "-")[[1]][1] |
+                                         PLAYER_2 == strsplit(names(combo),
+                                                              "-")[[1]][1] |
+                                         PLAYER_3 == strsplit(names(combo),
+                                                              "-")[[1]][1] |
+                                         PLAYER_4 == strsplit(names(combo), 
+                                                              "-")[[1]][1] |
+                                         PLAYER_5 == strsplit(names(combo),
+                                                              "-")[[1]][1]) &
+                                        (PLAYER_1 == strsplit(names(combo),
+                                                              "-")[[1]][2] |
+                                           PLAYER_2 == strsplit(names(combo),
+                                                                "-")[[1]][2] |
+                                           PLAYER_3 == strsplit(names(combo),
+                                                                "-")[[1]][2] |
+                                           PLAYER_4 == strsplit(names(combo),
+                                                                "-")[[1]][2] |
+                                           PLAYER_5 == strsplit(names(combo),
+                                                                "-")[[1]][2])) %>%
+    dplyr::ungroup() %>%
+    dplyr::summarise(sum(SECONDS))
+#pasting each team's derived row from the function (team, pair, combos, seconds)
+#into the pairs dataframe
+  pairs <- rbind(pairs, data.frame(TEAM=team, PLAYERS=names(combo),  COMBOS=combo, SECONDS = as.integer(seconds[1,1])))
+}
+#making it readable
+pairs <- pairs %>%
+  #splitting the pair column into two players so that we can assign their names
+  separate(col = PLAYERS, into = c("Player1", "Player2"), sep = "-") %>% 
+  #changing names and setting to numeric to prepare for join
+  mutate(Player1 = as.numeric(Player1), 
+         Player2 = as.numeric(Player2), 
+         #the question asked to list by minutes, so setting minutes
+         Minutes = round(SECONDS/60, 2)) %>% 
+  #joining by player list to set names of player 1 and player 2
+  left_join(playerlist, by = c("Player1" = "PERSON_ID")) %>% 
+  left_join(playerlist, by = c("Player2" = "PERSON_ID")) %>% 
+  #getting rid of IDs and setting column names
+  select(Team = TEAM, Player = c(DISPLAY_FIRST_LAST.x, DISPLAY_FIRST_LAST.y),
+         Minutes) %>% 
+  #putting player names together
+  unite(Player_Pair, c("Player1", "Player2"), sep = ", ") %>% 
+  #Setting column to group by division
+  mutate(Division = ifelse(Team %in% c("Celtics", "Nets", "Knicks", "76ers",
+                                       "Raptors"),"Atlantic", 
+                           ifelse(Team %in% c("Bulls", "Cavaliers", "Pistons",
+                                              "Pacers", "Bucks"),
+                                  "Central", 
+                                  ifelse(Team %in% c("Hawks", "Hornets", "Heat",
+                                                     "Magic", "Wizards"),
+                                         "Southeast", 
+                                         ifelse(Team %in% c("Nuggets",
+                                                            "Timberwolves",
+                                                            "Thunder", 
+                                                            "Trail Blazers",
+                                                            "Jazz"), "Northwest",
+                                                ifelse(Team %in% c("Warriors",
+                                                                   "Clippers",
+                                                                   "Lakers",
+                                                                   "Suns",
+                                                                   "Kings"),
+                                                       "Pacific",
+                                                       ifelse(Team %in% 
+                                                                c("Mavericks",
+                                                                  "Rockets",
+                                                                  "Grizzlies",
+                                                                  "Pelicans",
+                                                                  "Spurs"),
+                                                              "Southwest","")
+                                                       ))))))
+#making plots by division (easier to read 6 plots of 5 than one plot of 30)
+Atlantic_Plot <- pairs %>%
+  filter(Division %in% "Atlantic") %>%
+  ggplot() +
+  aes(x = reorder(Team, -Minutes), weight = Minutes) +
+  geom_bar(fill = "#112446") +
+  geom_text(aes(y = Minutes, 
+                label = str_wrap(Player_Pair, width = 10)), 
+            vjust = 1.25, color = "white", size = 3)+
+  xlab("")+
+  ggtitle("Atlantic Division")
+Pacific_Plot <- pairs %>%
+  filter(Division %in% "Pacific") %>%
+  ggplot() +
+  aes(x = reorder(Team, -Minutes), weight = Minutes) +
+  geom_bar(fill = "#112446") +
+  geom_text(aes(y = Minutes, 
+                label = str_wrap(Player_Pair, width = 10)), 
+            vjust = 1.25, color = "white", size = 3)+
+  xlab("")+
+  ggtitle("Pacific Division")
+Central_Plot <- pairs %>%
+  filter(Division %in% "Central") %>%
+  ggplot() +
+  aes(x = reorder(Team, -Minutes), weight = Minutes) +
+  geom_bar(fill = "#112446") +
+  geom_text(aes(y = Minutes, 
+                label = str_wrap(Player_Pair, width = 10)),
+            vjust = 1.25, color = "white", size = 3)+
+  xlab("")+
+  ggtitle("Central Division")
+Southeast_Plot <- pairs %>%
+  filter(Division %in% "Southeast") %>%
+  ggplot() +
+  aes(x = reorder(Team, -Minutes), weight = Minutes) +
+  geom_bar(fill = "#112446") +
+  geom_text(aes(y = Minutes, 
+                label = str_wrap(Player_Pair, width = 10)),
+            vjust = 1.25, color = "white", size = 3)+
+  xlab("")+
+  ggtitle("Southeast Division")
+Southwest_Plot <- pairs %>%
+  filter(Division %in% "Southwest") %>%
+  ggplot() +
+  aes(x = reorder(Team, -Minutes), weight = Minutes) +
+  geom_bar(fill = "#112446") +
+  geom_text(aes(y = Minutes, 
+                label = str_wrap(Player_Pair, width = 10)),
+            vjust = 1.25, color = "white", size = 3)+
+  xlab("")+
+  ggtitle("Southwest Division")
+Northwest_Plot <- pairs %>%
+  filter(Division %in% "Northwest") %>%
+  ggplot() +
+  aes(x = reorder(Team, -Minutes), weight = Minutes) +
+  geom_bar(fill = "#112446") +
+  geom_text(aes(y = Minutes, 
+                label = str_wrap(Player_Pair, width = 10)), 
+            vjust = 1.25, color = "white", size = 3)+
+  xlab("")+
+  ggtitle("Northwest Division")
+#appending plots to one object
+combined_plot <- ggarrange(Atlantic_Plot, 
+                           Central_Plot, 
+                           Southeast_Plot,
+                           Northwest_Plot,
+                           Pacific_Plot, 
+                           Southwest_Plot,
+                           ncol = 3, nrow = 2)
+#adding title to the annotated object and saving for future use
+annotated_plot <- annotate_figure(combined_plot, 
+                top = text_grob("Most Played Pairs by Team, Q1 3:00 - Q2 9:00 \n Grouped by Division, 2018-2019", color = "black", face = "bold", size = 14))
+annotated_plot
+```
+
+##### Use the embedded file below that contains player height and weight. Pick one team and calculate the average ACWR (using the assumptions below) of their players, weighted by minutes played.  Do so for each game of the season and display the results on a graph of your choosing.
+For this portion, I'm going to use minutes per player from `nbastatR` package, game_logs function. Before we calculate load, we need to make sense of the csv with player height and weight. I'm going to going to have to separate them into two columns, then convert to one new height column before calculating BMI. I'll join BMI with the hawks_2018 dataframe using player ID as a key, calculate daily load, and then calculate the load sums for L~a~ and L~c~. I'll divide L~a~ by L~c~ to derive ACWR and plot individual for each date and mean.
+``` {r ACWR, , echo = F, include = T, warning = F, message = F, results = F, fig.height = 3, fig.width = 8, fig.align = "center"}
+hawks_2018 <- games_2018 %>% filter(slugTeam == "ATL")
+HtWt <- HtWt %>% 
+  #separating by the "/"
+  separate(col = Height, into = c("Feet", "Inches"), sep = "/") %>%
+  #upon separating the columns are characters, so coercing them to numeric
+  mutate(Feet = as.numeric(Feet), Inches = as.numeric(Inches)) %>% 
+  #setting height in inches
+  mutate(Height = Feet * 12 + Inches) %>%
+  #calculating BMI using CDC formula
+  mutate(BMI = round(Weight/Height^2 * 703, 2)) %>% 
+  #removing extraneous variables for the join
+  select(-c(First_name, Last_name, Feet, Inches, Weight, Height))
+#joining the BMI to the game log dataframe by the player ID columns
+hawks_2018 <- hawks_2018 %>% 
+  left_join(HtWt, by = c("idPlayer" = "Person_id"))
+#calculating load as instructed
+hawks_2018 <- hawks_2018 %>% mutate(Load = minutes * BMI)
+#calculating acute and chronic load per instructions
+hawks_2018 <- hawks_2018 %>% 
+  mutate(Acute_Load = rollingByCalcs(data = hawks_2018, 
+                                         bylist = c("idPlayer"), 
+                                         dates = "dateGame", 
+                                         target = "Load", 
+                                         lower = 0, 
+                                         upper = 3, 
+                                         incbounds = T, 
+                                         stat = sum, 
+                                         na.rm = F), 
+         Chronic_Load = rollingByCalcs(data = hawks_2018, 
+                                       bylist = c("idPlayer"), 
+                                       dates = "dateGame", 
+                                       target = "Load", 
+                                       lower = 0, 
+                                       upper = 20, 
+                                       incbounds = T, 
+                                       stat = sum, 
+                                       na.rm = F)) %>%
+  #calculating ACWR by dividing
+  mutate(ACWR = Acute_Load/Chronic_Load) %>% 
+  #setting anything before 21 days between start of season and current date to 
+  #NA. We will be using this data for analysis later, and it'll make it easier
+  #to model with.
+  mutate(ACWR = ifelse(as.numeric(difftime(dateGame, as.Date("2018-10-17"), units = "days")) < 21, NA, ACWR))
+
+#making a plot now, going to plot all individual ACWR by game, then the means as
+#well
+ACWR_Plot <- hawks_2018 %>% na.omit(ACWR) %>% 
+  ggplot(aes(x = dateGame, y = ACWR)) +
+  geom_point(aes(color ="#e03a3e" ,group = dateGame)) +
+  stat_summary(aes(color = "#26282A"), fun = mean, geom = "point", size = 6) +
+  scale_color_manual(name = NULL, values = c("#e03a3e"= "#e03a3e", "#26282A" = "#26282A"), labels = c("Individual", "Average")) +
+  guides(fill = guide_legend(title = NULL)) + 
+  ylab("ACWR: Team and Individual") +
+  xlab("Date of Game") + 
+  ggtitle("Atlanta Hawks Individual and Team ACWR", "2018-2019 Season")
+ACWR_Plot
+```
+
+##### Determine if the team’s performance changes based on its ACWR. Analyze team performance overall, offensive and defensive four factors.
+I ran linear regression models using ACWR as the predictor and team plus minus, field goal percentage (2 and 3 point FG), free throw percentage, offensive rebounds, defensive rebounds, steals, blocks and turnovers. All had no clear linear association with ACWR. This leads me to believe that ACWR may not be an accurate predictor in game-based performance metrics, however there are plenty of other high-yield performance metrics that can be associated with ACWR that may be proxies for game performance, like game RPE, subjective soreness, or perceived fatigue.
