@@ -1,14 +1,18 @@
 ---
 title: \vspace{-0.75cm} \begin{normalsize}  "Atlanta Hawks Technical Assessment" \end{normalsize} \vspace{-0.5cm}
 author: "Lyle Danley"
-date: "9/23/2021"
+date: "11/30/2021"
 output: html_document
 ---
 
 ```{r setup, include=FALSE}
-install.packages(c("readr", "tidyverse", "ggpubr", "ggcorrplot", "RCurl", "remotes"))
-remotes::install_github(c("abresler/nbastatR",
-                          "mgahan/boRingTrees"))
+
+#if one of these packages is not installed, please use the following
+#statements to install for proper use of knitr package
+
+#install.packages(c("readr", "tidyverse", "ggpubr", "ggcorrplot", "RCurl", "remotes"), repo = "http://cran.us.r-project.org")
+#remotes::install_github(c("abresler/nbastatR",
+#                          "mgahan/boRingTrees"))
 
 
 library(readr)
