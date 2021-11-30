@@ -31,7 +31,8 @@ teams_2018 <- game_logs(
   result_types = "team"
 )
 #height weight previously given, saved as a CSV and loaded
-HtWt <- read_csv("HtWt.csv")
+x <- Rcurl::getURL("https://raw.githubusercontent.com/lyledanley/sample-work/main/datasets/HtWt.csv")
+HtWt <- Rcurl::read.csv(text = x)
 
 #putting the playerlist in the best format for a join
 playerlist <- playerlist %>% select(DISPLAY_FIRST_LAST,PERSON_ID)
