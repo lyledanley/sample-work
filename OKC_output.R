@@ -1,10 +1,8 @@
 library(tidyverse)
 library(readr)
 library(formattable)
-library(Rcurl)
 
-x <- getURL("https://raw.githubusercontent.com/lyledanley/sample-work/main/datasets/shots_data.csv")
-shots <- read.csv(text = x)
+shots <- read.csv("https://raw.githubusercontent.com/lyledanley/sample-work/main/datasets/shots_data.csv")
 
 #deriving shot_type based on dimensions given and plotting points on a circle
 shots <- shots |>
